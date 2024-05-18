@@ -11,10 +11,10 @@ extern crate nalgebra as na;
 #[allow(non_snake_case)]
 #[derive(Copy, Clone)]
 pub struct LinearSystem<const NX: usize, const NY: usize, const NU: usize> {
-    A: na::SMatrix<f64, NX, NX>,
-    B: na::SMatrix<f64, NX, NU>,
-    C: na::SMatrix<f64, NY, NX>,
-    D: na::SMatrix<f64, NY, NU>,
+    pub A: na::SMatrix<f64, NX, NX>,
+    pub B: na::SMatrix<f64, NX, NU>,
+    pub C: na::SMatrix<f64, NY, NX>,
+    pub D: na::SMatrix<f64, NY, NU>,
 }
 
 #[allow(non_snake_case)]
@@ -27,6 +27,19 @@ impl<const NX: usize, const NY: usize, const NU: usize> LinearSystem<NX, NY, NU>
     ) -> Self {
         Self { A, B, C, D }
     }
+
+    pub fn A(&self) -> &na::SMatrix<f64, NX, NX> {
+        &self.A
+    }
+    pub fn B(&self) -> &na::SMatrix<f64, NX, NU> {
+        &self.B
+    }
+    pub fn C(&self) -> &na::SMatrix<f64, NY, NX> {
+        &self.C
+    }
+    pub fn D(&self) -> &na::SMatrix<f64, NY, NU> {
+        &self.D
+    }
 }
 
 /// Linear Time-Invariant System with Gaussian noise
@@ -34,9 +47,9 @@ impl<const NX: usize, const NY: usize, const NU: usize> LinearSystem<NX, NY, NU>
 /// y(k) = C*x(k) + D*u(k) + v(k)
 #[derive(Copy, Clone)]
 pub struct GaussianLinearSystem<const NX: usize, const NY: usize, const NU: usize> {
-    system: LinearSystem<NX, NY, NU>,
-    w_cov: na::SMatrix<f64, NX, NX>,
-    v_cov: na::SMatrix<f64, NY, NY>,
+    pub system: LinearSystem<NX, NY, NU>,
+    pub w_cov: na::SMatrix<f64, NX, NX>,
+    pub v_cov: na::SMatrix<f64, NY, NY>,
 }
 
 #[allow(non_snake_case)]
