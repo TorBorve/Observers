@@ -32,7 +32,7 @@ impl<const NX: usize, const NY: usize, const NU: usize> LuenbergerObserver<NX, N
     }
 }
 
-impl<const NX: usize, const NY: usize, const NU: usize> crate::Observer::Observer<NX, NY, NU>
+impl<const NX: usize, const NY: usize, const NU: usize> crate::observers::observer::Observer<NX, NY, NU>
     for LuenbergerObserver<NX, NY, NU>
 {
     fn update(&mut self, u: &na::SVector<f64, NU>, y: &na::SVector<f64, NY>) {

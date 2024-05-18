@@ -9,7 +9,8 @@ extern crate nalgebra as na;
 /// y(k) = C*x(k) + D*u(k)
 /// No noise is considered
 #[allow(non_snake_case)]
-struct LinearSystem<const NX: usize, const NY: usize, const NU: usize> {
+#[derive(Copy, Clone)]
+pub struct LinearSystem<const NX: usize, const NY: usize, const NU: usize> {
     A: na::SMatrix<f64, NX, NX>,
     B: na::SMatrix<f64, NX, NU>,
     C: na::SMatrix<f64, NY, NX>,
@@ -31,7 +32,8 @@ impl<const NX: usize, const NY: usize, const NU: usize> LinearSystem<NX, NY, NU>
 /// Linear Time-Invariant System with Gaussian noise
 /// x(k+1) = A*x(k) + B*u(k) + w(k)
 /// y(k) = C*x(k) + D*u(k) + v(k)
-struct GaussianLinearSystem<const NX: usize, const NY: usize, const NU: usize> {
+#[derive(Copy, Clone)]
+pub struct GaussianLinearSystem<const NX: usize, const NY: usize, const NU: usize> {
     system: LinearSystem<NX, NY, NU>,
     w_cov: na::SMatrix<f64, NX, NX>,
     v_cov: na::SMatrix<f64, NY, NY>,
@@ -53,9 +55,27 @@ impl<const NX: usize, const NY: usize, const NU: usize> GaussianLinearSystem<NX,
             v_cov,
         }
     }
+    pub fn A(&self) -> &na::SMatrix<f64, NX, NX> {
+        &self.system.A
+    }
+    pub fn B(&self) -> &na::SMatrix<f64, NX, NU> {
+        &self.system.B
+    }
+    pub fn C(&self) -> &na::SMatrix<f64, NY, NX> {
+        &self.system.C
+    }
+    pub fn D(&self) -> &na::SMatrix<f64, NY, NU> {
+        &self.system.D
+    }
+    pub fn w_cov(&self) -> &na::SMatrix<f64, NX, NX> {
+        &self.w_cov
+    }
+    pub fn v_cov(&self) -> &na::SMatrix<f64, NY, NY> {
+        &self.v_cov
+    }
 }
 
-trait Model<const NX: usize, const NY: usize, const NU: usize> {
+pub trait Model<const NX: usize, const NY: usize, const NU: usize> {
     /// Simulate the system for a given initial state and input sequence
     /// Returns the state and output series (x(k), y(k))
     fn simulate(
@@ -249,7 +269,7 @@ mod tests {
             "Initial state is the first element of x_series"
         );
 
-        let (x_next, y) = system.simulate_step(&x_init, &u[0]);
+        let (_, _) = system.simulate_step(&x_init, &u[0]);
     }
 
     #[test]
