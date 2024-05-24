@@ -1,5 +1,3 @@
-
-
 extern crate nalgebra as na;
 
 #[allow(non_snake_case)]
@@ -95,10 +93,97 @@ fn phb_test_fulfilled(
     Some(true)
 }
 
+#[allow(non_snake_case)]
+/// Solve the discrete algebraic Riccati equation
+/// P = A^TPA - A^TPB(R+B^TPB)^-1B^TPA + Q
+pub fn dare(
+    A: &na::DMatrix<f64>,
+    B: &na::DMatrix<f64>,
+    Q: &na::DMatrix<f64>,
+    R: &na::DMatrix<f64>,
+) -> Option<na::DMatrix<f64>> {
+    // Check conditions before solving
+    assert!(A.is_square());
+    assert!(Q.is_square());
+    assert!(R.is_square());
+    assert_eq!(Q.ncols(), A.ncols());
+    assert_eq!(B.nrows(), A.nrows());
+    assert_eq!(B.ncols(), R.ncols());
+
+    let G = Q.clone().cholesky()?.l(); // Q must be Positive Semi-Definite
+    if !is_detectable(A, &G) || !is_stabilizable(A, B) {
+        return None;
+    }
+
+    R.clone().cholesky()?;
+    let R_inv = R.clone().try_inverse()?;
+    let A_inv = A.clone().try_inverse()?;
+    let S = B * &R_inv * B.transpose();
+    // Z = [z11, z12;
+    //      z21, z22];
+
+    // let z_11 = A;
+    // let z_12 = -B * R_inv.clone() * B.transpose();
+    // let z_21 = -A_inv.transpose() * Q * A;
+    // let z_22 = A_inv.transpose()
+    //     * (na::DMatrix::identity(A.nrows(), A.ncols()) + Q * B * R_inv * B.transpose());
+    let z_11 = A + &S * A_inv.transpose() * Q;
+    let z_12 = -S * A_inv.transpose();
+    let z_21 = -A_inv.transpose() * Q;
+    let z_22 = A_inv.transpose();
+
+    let mut Z = na::DMatrix::zeros(z_11.nrows() + z_22.nrows(), z_11.ncols() + z_12.ncols());
+    Z.view_mut((0, 0), z_11.shape()).copy_from(&z_11);
+    Z.view_mut((0, z_11.ncols()), z_12.shape()).copy_from(&z_12);
+    Z.view_mut((z_11.nrows(), 0), z_21.shape()).copy_from(&z_21);
+    Z.view_mut(z_11.shape(), z_22.shape())
+        .copy_from(&z_22);
+
+    // Use Schur decomposition to solve the Riccati equation
+    // https://math.stackexchange.com/questions/3119575/how-can-i-solve-the-discrete-algebraic-riccati-equations
+    let (mut U, _) = Z.try_schur(1.0e-6, 1000)?.unpack();
+    // U = U.transpose(); // ????? Just a guess
+
+    let u_11 = U.view((0, 0), z_11.shape());
+    let u_21 = U.view((z_11.nrows(), 0), z_21.shape());
+
+    // P = U_21 * U_11^-1;
+    let P = u_21 * u_11.try_inverse()?;
+
+    assert!(P.clone().cholesky().is_some(), "P should be PSD");
+    Some(P)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
     use crate::linsystheory::is_stable;
+
+    #[allow(non_snake_case)]
+    fn dare_bruteforce(
+        A: &na::DMatrix<f64>,
+        B: &na::DMatrix<f64>,
+        Q: &na::DMatrix<f64>,
+        R: &na::DMatrix<f64>,
+        niter: u32,
+    ) -> Option<na::DMatrix<f64>> {
+        // P_(k+1) = A^TPA - A^TPB(R+B^TPB)^-1B^TPA + Q
+        let mut P = Q.clone();
+        for _ in 0..niter {
+            P = A.transpose() * P.clone() * A
+                - A.transpose()
+                    * P.clone()
+                    * B
+                    * ((R + B.transpose() * P.clone() * B).try_inverse()?)
+                    * B.transpose()
+                    * P.clone()
+                    * A
+                + Q;
+        }
+        Some(P)
+    }
 
     #[test]
     fn test_is_stable() {
@@ -202,5 +287,23 @@ mod tests {
             true,
             "Stabilizable system"
         );
+    }
+
+    #[test]
+    fn test_dare() {
+        let a_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
+        let b_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
+        let q_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
+        let r_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
+
+        let p_matrix_opt = dare(&a_matrix, &b_matrix, &q_matrix, &r_matrix);
+        assert!(p_matrix_opt.is_some());
+        let p_matrix = p_matrix_opt.unwrap();
+        println!("P: {:?}", p_matrix);
+
+        let p_matrix_iter_opt = dare_bruteforce(&a_matrix, &b_matrix, &q_matrix, &r_matrix, 1000);
+        assert!(p_matrix_iter_opt.is_some());
+        let p_matrix_iter = p_matrix_iter_opt.unwrap();
+        println!("P_iter: {:?}", p_matrix_iter);
     }
 }
