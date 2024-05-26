@@ -1,3 +1,5 @@
+use debug_print::debug_println;
+
 extern crate nalgebra as na;
 
 #[allow(non_snake_case)]
@@ -110,23 +112,20 @@ pub fn dare(
     assert_eq!(B.nrows(), A.nrows());
     assert_eq!(B.ncols(), R.ncols());
 
+    debug_println!("Q^1/2");
     let G = Q.clone().cholesky()?.l(); // Q must be Positive Semi-Definite
+    debug_println!("Check deteca..");
     if !is_detectable(A, &G) || !is_stabilizable(A, B) {
+        println!("Not detectable or stabilizable");
         return None;
     }
 
+    debug_println!("R cholesky try");
     R.clone().cholesky()?;
     let R_inv = R.clone().try_inverse()?;
     let A_inv = A.clone().try_inverse()?;
     let S = B * &R_inv * B.transpose();
-    // Z = [z11, z12;
-    //      z21, z22];
 
-    // let z_11 = A;
-    // let z_12 = -B * R_inv.clone() * B.transpose();
-    // let z_21 = -A_inv.transpose() * Q * A;
-    // let z_22 = A_inv.transpose()
-    //     * (na::DMatrix::identity(A.nrows(), A.ncols()) + Q * B * R_inv * B.transpose());
     let z_11 = A + &S * A_inv.transpose() * Q;
     let z_12 = -S * A_inv.transpose();
     let z_21 = -A_inv.transpose() * Q;
@@ -136,13 +135,64 @@ pub fn dare(
     Z.view_mut((0, 0), z_11.shape()).copy_from(&z_11);
     Z.view_mut((0, z_11.ncols()), z_12.shape()).copy_from(&z_12);
     Z.view_mut((z_11.nrows(), 0), z_21.shape()).copy_from(&z_21);
-    Z.view_mut(z_11.shape(), z_22.shape())
-        .copy_from(&z_22);
+    Z.view_mut(z_11.shape(), z_22.shape()).copy_from(&z_22);
 
     // Use Schur decomposition to solve the Riccati equation
     // https://math.stackexchange.com/questions/3119575/how-can-i-solve-the-discrete-algebraic-riccati-equations
-    let (mut U, _) = Z.try_schur(1.0e-6, 1000)?.unpack();
-    // U = U.transpose(); // ????? Just a guess
+    // At the time of writing this the nalgebra::Schur method does not sort the eigenvalues as is nescessary. Therefore, LAPACK is used.
+    // See: https://netlib.org/lapack/explore-html/d5/d38/group__gees_gab48df0b5c60d7961190d868087f485bc.html#gab48df0b5c60d7961190d868087f485bc
+
+    extern "C" fn select_stable_eigen_fn(real: *const f64, _imag: *const f64) -> i32 {
+        unsafe { (*real < 1.0) as i32 }
+    }
+
+    let select_stable_eigen: lapack::Select2F64 = Some(select_stable_eigen_fn);
+    let n = Z.ncols();
+    let mut a: Vec<f64> = (*Z.clone().data.as_vec()).clone();
+    let mut sdim = 0; // out variable
+    let mut wr = vec![0.0; n];
+    let mut wi = vec![0.0; n];
+    let mut vs = vec![0.0; n * n];
+    let mut bwork = vec![0; n];
+    let mut info = 0;
+
+    // First query to find optimal work size.
+    let mut schur_lapack_fn = |work_ref: &mut [f64], lwork: i32| unsafe {
+        lapack::dgees(
+            b'V',
+            b'S',
+            select_stable_eigen,
+            n as i32,
+            &mut a,
+            n as i32,
+            &mut sdim,
+            &mut wr,
+            &mut wi,
+            &mut vs,
+            n as i32,
+            work_ref,
+            lwork,
+            &mut bwork,
+            &mut info,
+        );
+        assert_eq!(info, 0);
+    };
+    let mut work = vec![0.0; 1];
+    let mut lwork = -1; // set to -1 to first get the optimal work size.
+    schur_lapack_fn(&mut work, lwork);
+
+    lwork = work[0] as i32; // optimal work size stored in work[0]
+    work = vec![0.0; lwork as usize];
+
+    schur_lapack_fn(&mut work, lwork);
+    std::mem::drop(schur_lapack_fn); // drop borrowed variables
+
+    // A = Z*T*(Z^T)
+    // a = T
+    // vs = Z
+    // let t_mat = na::DMatrix::from_vec(n, n, a);
+    let z_mat = na::DMatrix::from_vec(n, n, vs);
+    let U = z_mat.clone();
 
     let u_11 = U.view((0, 0), z_11.shape());
     let u_21 = U.view((z_11.nrows(), 0), z_21.shape());
@@ -151,6 +201,19 @@ pub fn dare(
     let P = u_21 * u_11.try_inverse()?;
 
     assert!(P.clone().cholesky().is_some(), "P should be PSD");
+    approx::assert_relative_eq!(
+        P,
+        A.transpose() * &P * A
+            - A.transpose()
+                * &P
+                * B
+                * ((R + B.transpose() * &P * B).try_inverse()?)
+                * B.transpose()
+                * &P
+                * A
+            + Q,
+        epsilon = 1.0e-4
+    );
     Some(P)
 }
 
@@ -182,6 +245,20 @@ mod tests {
                     * A
                 + Q;
         }
+        assert!(P.clone().cholesky().is_some(), "P should be PSD");
+        approx::assert_relative_eq!(
+            P,
+            A.transpose() * &P * A
+                - A.transpose()
+                    * &P
+                    * B
+                    * ((R + B.transpose() * &P * B).try_inverse()?)
+                    * B.transpose()
+                    * &P
+                    * A
+                + Q,
+            epsilon = 1.0e-4
+        );
         Some(P)
     }
 
@@ -291,19 +368,39 @@ mod tests {
 
     #[test]
     fn test_dare() {
-        let a_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
-        let b_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
-        let q_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
-        let r_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 1.0, 0.0]);
-
+        let a_matrix = na::DMatrix::from_vec(2, 2, vec![0.9, 0.0, 0.0, 0.9]);
+        let b_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let q_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let r_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
         let p_matrix_opt = dare(&a_matrix, &b_matrix, &q_matrix, &r_matrix);
         assert!(p_matrix_opt.is_some());
         let p_matrix = p_matrix_opt.unwrap();
-        println!("P: {:?}", p_matrix);
 
         let p_matrix_iter_opt = dare_bruteforce(&a_matrix, &b_matrix, &q_matrix, &r_matrix, 1000);
         assert!(p_matrix_iter_opt.is_some());
         let p_matrix_iter = p_matrix_iter_opt.unwrap();
-        println!("P_iter: {:?}", p_matrix_iter);
+
+        approx::assert_relative_eq!(p_matrix, p_matrix_iter, epsilon = 1e-4);
+
+        let a_matrix = na::DMatrix::from_vec(2, 2, vec![0.9, 0.0, 0.0, 0.9]);
+        let b_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let q_matrix = na::DMatrix::from_vec(2, 2, vec![0.0, 0.0, 0.0, 0.0]);
+        let r_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let p_matrix_opt = dare(&a_matrix, &b_matrix, &q_matrix, &r_matrix);
+        assert!(p_matrix_opt.is_none());
+
+        let a_matrix = na::DMatrix::from_vec(2, 2, vec![10.23, 0.0, 0.0, 0.9]);
+        let b_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 0.0]);
+        let q_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let r_matrix = na::DMatrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
+        let p_matrix_opt = dare(&a_matrix, &b_matrix, &q_matrix, &r_matrix);
+        assert!(p_matrix_opt.is_some());
+        let p_matrix = p_matrix_opt.unwrap();
+
+        let p_matrix_iter_opt = dare_bruteforce(&a_matrix, &b_matrix, &q_matrix, &r_matrix, 10000);
+        assert!(p_matrix_iter_opt.is_some());
+        let p_matrix_iter = p_matrix_iter_opt.unwrap();
+
+        approx::assert_relative_eq!(p_matrix, p_matrix_iter, epsilon = 1e-4);
     }
 }
