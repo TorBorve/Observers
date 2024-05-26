@@ -1,5 +1,3 @@
-use std::ops::{Deref, DerefMut};
-
 use rand::distributions::Distribution;
 
 extern crate nalgebra as na;
