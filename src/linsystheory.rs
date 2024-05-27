@@ -5,7 +5,7 @@ extern crate nalgebra as na;
 #[allow(non_snake_case)]
 /// Determine if closed loop system is stable.
 /// A_clp: closed loop system. Assumed to be discrete
-fn is_stable(A_clp: &na::DMatrix<f64>) -> bool {
+pub fn is_stable(A_clp: &na::DMatrix<f64>) -> bool {
     // Convert to complex matrix to solve eigenvalues
     let A_clp_complex = A_clp.map(|x| na::Complex::new(x, 0.0));
     match A_clp_complex.eigenvalues() {

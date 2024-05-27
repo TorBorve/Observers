@@ -20,6 +20,10 @@ impl<const NX: usize, const NY: usize, const NU: usize> LuenbergerObserver<NX, N
     ) -> Self {
         Self { model, L, x_hat }
     }
+
+    pub fn gain_matrix(&self) -> &na::SMatrix<f64, NX, NY> {
+        &self.L
+    }
 }
 
 impl<const NX: usize, const NY: usize, const NU: usize>
