@@ -10,3 +10,4 @@ Several state observers implemented in Rust.
 - [ ] Make Embedded systems friendly. I.e. no_std
 - [ ] Make custom matrix/linalg library.
 - [ ] Observers compatible with both static and dynamic sizes.
+- [ ] Automatic testing using Github Workflows
