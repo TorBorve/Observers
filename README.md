@@ -1,4 +1,5 @@
 # Observers
+![Build test](https://github.com/TorBorve/Observers/actions/workflows/rust.yml/badge.svg)
 
 Several state observers implemented in Rust.
 
