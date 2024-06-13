@@ -3,16 +3,19 @@ extern crate nalgebra as na;
 use std::usize;
 
 use crate::linsystheory::dare;
-use crate::models::GaussianLinearSystem;
+use crate::models::{GaussianLinearSystem, Linear, NoiseNormalDistrubuted, ObserverModel, LinearSystem};
 use crate::observers::observer::Observer;
 
 use super::luenberger::LuenbergerObserver;
 
 #[allow(non_snake_case)]
 #[derive(Copy, Clone)]
-pub struct KalmanFilter<const NX: usize, const NY: usize, const NU: usize> {
+pub struct KalmanFilter<T, const NX: usize, const NY: usize, const NU: usize>
+where
+T: ObserverModel<NX, NU, NX, NY, NU, NY> + Linear<NX, NU, NX, NY, NU, NY> + NoiseNormalDistrubuted<NY, NX>
+{
     // Model
-    model: GaussianLinearSystem<NX, NY, NU>,
+    model: T,
 
     // Kalman Filter state
     P_m: na::SMatrix<f64, NX, NX>,
@@ -20,9 +23,9 @@ pub struct KalmanFilter<const NX: usize, const NY: usize, const NU: usize> {
 }
 
 #[allow(non_snake_case)]
-impl<const NX: usize, const NY: usize, const NU: usize> KalmanFilter<NX, NY, NU> {
+impl<T: ObserverModel<NX, NU, NX, NY, NU, NY> + Linear<NX, NU, NX, NY, NU, NY> + NoiseNormalDistrubuted<NY, NX>, const NX: usize, const NY: usize, const NU: usize> KalmanFilter<T, NX, NY, NU> {
     pub fn new(
-        model: GaussianLinearSystem<NX, NY, NU>,
+        model: T,
         P_m_init: na::SMatrix<f64, NX, NX>,
         x_hat_init: na::SVector<f64, NX>,
     ) -> Self {
@@ -65,18 +68,32 @@ impl<const NX: usize, const NY: usize, const NU: usize> KalmanFilter<NX, NY, NU>
 }
 
 #[allow(non_snake_case)]
-impl<const NX: usize, const NY: usize, const NU: usize> Observer<NX, NY, NU>
-    for KalmanFilter<NX, NY, NU>
+impl<T: ObserverModel<NX, NU, NX, NY, NU, NY> + Linear<NX, NU, NX, NY, NU, NY> + NoiseNormalDistrubuted<NY, NX>, const NX: usize, const NY: usize, const NU: usize> Observer<NX, NY, NU>
+    for KalmanFilter<T, NX, NY, NU>
 {
     fn update(&mut self, u: &na::SVector<f64, NU>, y: &na::SVector<f64, NY>) {
         // Call static method to update the state
+        let a_mat = self.model.linear_state_model_dx();
+        let b_mat = self.model.linear_state_model_du();
+        let c_mat = self.model.linear_meas_model_dx();
+        let d_mat = self.model.linear_meas_model_dd();
+
+        let w_cov_scale = self.model.linear_state_model_dw();
+        let w_cov = w_cov_scale * self.model.cov_state_noise() * w_cov_scale.transpose();
+
+        let v_cov_scale = self.model.linear_meas_model_dv();
+        let v_cov = v_cov_scale * self.model.cov_meas_noise() * v_cov_scale.transpose();
+
+        assert_eq!(self.model.mean_meas_noise(), na::SVector::<f64, NY>::zeros());
+        assert_eq!(self.model.mean_state_noise(), na::SVector::<f64, NX>::zeros());
+
         let (x_hat_m, P_m) = Self::update_pure(
-            self.model.A(),
-            self.model.B(),
-            self.model.C(),
-            self.model.D(),
-            self.model.w_cov(),
-            self.model.v_cov(),
+            &a_mat,
+            &b_mat,
+            &c_mat,
+            &d_mat,
+            &w_cov,
+            &v_cov,
             &self.x_hat_m,
             &self.P_m,
             u,
@@ -96,13 +113,13 @@ pub fn steady_state_kalman_gain<const NX: usize, const NY: usize, const NU: usiz
 ) -> Option<na::SMatrix<f64, NX, NY>> {
     // let a_iter = model.A()
     let mut a_matrix = na::DMatrix::zeros(NX, NX);
-    a_matrix.copy_from(model.A());
+    a_matrix.copy_from(&model.linear_state_model_dx());
     let mut c_matrix = na::DMatrix::zeros(NY, NX);
-    c_matrix.copy_from(model.C());
+    c_matrix.copy_from(&model.linear_meas_model_dx());
     let mut q_matrix = na::DMatrix::zeros(NX, NX);
-    q_matrix.copy_from(model.w_cov());
+    q_matrix.copy_from(&model.cov_state_noise());
     let mut r_matrix = na::DMatrix::zeros(NY, NY);
-    r_matrix.copy_from(model.v_cov());
+    r_matrix.copy_from(&model.cov_meas_noise());
 
     let p_matrix = dare(
         &a_matrix.transpose(),
@@ -123,7 +140,7 @@ pub fn steady_state_kalman_gain<const NX: usize, const NY: usize, const NU: usiz
 pub fn steady_state_kalman_filter<const NX: usize, const NY: usize, const NU: usize>(
     model: &GaussianLinearSystem<NX, NY, NU>,
     x_hat_init: &na::SVector<f64, NX>,
-) -> Option<LuenbergerObserver<NX, NY, NU>> {
+) -> Option<LuenbergerObserver<LinearSystem<NX, NY, NU>, NX, NY, NU>> {
     let gain_matrix = steady_state_kalman_gain(model)?;
     Some(LuenbergerObserver::new(
         model.system,
@@ -135,8 +152,6 @@ pub fn steady_state_kalman_filter<const NX: usize, const NY: usize, const NU: us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::GaussianLinearSystem;
-    use crate::models::Model;
 
     #[test]
     fn kalman_filter() {
@@ -158,7 +173,9 @@ mod tests {
         let mut x = x_init.clone();
         for _ in 0..1000 {
             let u = na::SVector::<f64, 1>::new(0.0);
-            let (x_new, y) = model.simulate_step(&x, &u);
+            let x_new = model.state_model(&x, &u, &na::SVector::<f64, 1>::zeros());
+            let y = model.meas_model(&x, &u, &na::SVector::<f64, 1>::zeros());
+
             x = x_new;
             kalman_filter.update(&u, &y);
         }
@@ -207,7 +224,7 @@ mod tests {
         let n_sim = 10000;
         let x0 = na::SVector::<f64, NX>::new(1., 1.);
         let u_seq = vec![na::SVector::<f64, NU>::zeros(); n_sim];
-        let (_x_seq, y_seq) = model.simulate(&x0, &u_seq);
+        let (_x_seq, y_seq) = model.simulate(&x0, &u_seq, &u_seq);
 
         for (y, u) in y_seq.iter().zip(u_seq.iter()) {
             kalman.update(u, y);

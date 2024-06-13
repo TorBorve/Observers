@@ -1,20 +1,25 @@
 extern crate nalgebra as na;
 
-use crate::models::LinearSystem;
+use crate::models::{Linear, LinearSystem, ObserverModel};
+
 
 #[allow(non_snake_case)]
 #[derive(Clone, Copy)]
-pub struct LuenbergerObserver<const NX: usize, const NY: usize, const NU: usize> {
+pub struct LuenbergerObserver<T, const NX: usize, const NY: usize, const NU: usize>
+where
+T: ObserverModel<NX, NU, 0, NY, NU, 0> + Linear<NX, NU, 0, NY, NU, 0>
+{
     // x_hat = A*x_hat + B*u + L*(y - C*x_hat - D*u)
-    model: LinearSystem<NX, NY, NU>,
+    model: T,
     L: na::SMatrix<f64, NX, NY>,
     x_hat: na::SVector<f64, NX>,
 }
 
 #[allow(non_snake_case)]
-impl<const NX: usize, const NY: usize, const NU: usize> LuenbergerObserver<NX, NY, NU> {
+impl<T: ObserverModel<NX, NU, 0, NY, NU, 0> + Linear<NX, NU, 0, NY, NU, 0> , const NX: usize, const NY: usize, const NU: usize> LuenbergerObserver<T, NX, NY, NU>
+{
     pub fn new(
-        model: LinearSystem<NX, NY, NU>,
+        model: T,
         L: na::SMatrix<f64, NX, NY>,
         x_hat: na::SVector<f64, NX>,
     ) -> Self {
@@ -26,13 +31,13 @@ impl<const NX: usize, const NY: usize, const NU: usize> LuenbergerObserver<NX, N
     }
 }
 
-impl<const NX: usize, const NY: usize, const NU: usize>
-    crate::observers::observer::Observer<NX, NY, NU> for LuenbergerObserver<NX, NY, NU>
+impl<T: ObserverModel<NX, NU, 0, NY, NU, 0> + Linear<NX, NU, 0, NY, NU, 0>, const NX: usize, const NY: usize, const NU: usize>
+    crate::observers::observer::Observer<NX, NY, NU> for LuenbergerObserver<T, NX, NY, NU>
 {
     fn update(&mut self, u: &na::SVector<f64, NU>, y: &na::SVector<f64, NY>) {
-        // let temp = self.A * self.x_hat;
-        let x_pred = self.model.A * self.x_hat + self.model.B * u;
-        let y_est = self.model.C * self.x_hat + self.model.D * u;
+
+        let x_pred = self.model.state_model(&self.x_hat, u, &na::SVector::<f64, 0>::zeros());
+        let y_est = self.model.meas_model(&self.x_hat, u, &na::SVector::<f64, 0>::zeros());
 
         self.x_hat = x_pred + self.L * (y - y_est);
     }
