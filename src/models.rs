@@ -1,42 +1,255 @@
+extern crate nalgebra as na;
 use rand::distributions::Distribution;
 
-extern crate nalgebra as na;
+pub trait ObserverModel<
+    const NX: usize,
+    const NU: usize,
+    const NW: usize,
+    const NY: usize,
+    const ND: usize,
+    const NV: usize,
+>
+{
+    fn state_model(
+        &self,
+        x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
+        w: &na::SVector<f64, NW>,
+    ) -> na::SVector<f64, NX>;
+
+    fn meas_model(
+        &self,
+        x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, ND>,
+        v: &na::SVector<f64, NV>,
+    ) -> na::SVector<f64, NY>;
+
+    // fn step(
+    //     &self,
+    //     x: &na::SVector<f64, NX>,
+    //     u: &na::SVector<f64, NU>,
+    //     w: &na::SVector<f64, NW>,
+    //     d: &na::SVector<f64, ND>,
+    //     v: &na::SVector<f64, NV>,
+    // ) -> (na::SVector<f64, NX>, na::SVector<f64, NY>) {
+    //     (self.state_model(x, u, w), self.meas_model(x, d, v))
+    // }
+
+    fn gen_state_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NW>>;
+
+    fn gen_meas_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NV>>;
+
+    // fn gen_noise(
+    //     &self,
+    //     num_noise_samples: usize,
+    // ) -> (Vec<na::SVector<f64, NW>>, Vec<na::SVector<f64, NV>>) {
+    //     (
+    //         self.gen_state_noise(num_noise_samples),
+    //         self.gen_meas_noise(num_noise_samples),
+    //     )
+    // }
+
+    fn simulate(
+        &self,
+        x0: &na::SVector<f64, NX>,
+        u_series: &Vec<na::SVector<f64, NU>>,
+        d_series: &Vec<na::SVector<f64, ND>>,
+    ) -> (Vec<na::SVector<f64, NX>>, Vec<na::SVector<f64, NY>>) {
+        let num_steps = u_series.len();
+        assert_eq!(u_series.len(), d_series.len());
+        let v_series = self.gen_meas_noise(num_steps);
+        let w_series = self.gen_state_noise(num_steps);
+
+        let mut y_series = Vec::with_capacity(num_steps);
+        let mut x_series = Vec::with_capacity(num_steps);
+
+        let mut x_k = *x0;
+
+        for i in 0..num_steps {
+            let d_k = &d_series[i];
+            let u_k = &u_series[i];
+            let v_k = &v_series[i];
+            let w_k = &w_series[i];
+
+            let y_k = self.meas_model(&x_k, d_k, v_k);
+            let x_k_next = self.state_model(&x_k, u_k, w_k);
+
+            y_series.push(y_k);
+            x_series.push(x_k);
+
+            x_k = x_k_next;
+        }
+
+        assert_eq!(y_series.len(), num_steps);
+        assert_eq!(x_series.len(), num_steps);
+
+        (x_series, y_series)
+    }
+}
+
+pub trait Differentiable<const NX: usize, const NW: usize, const NY: usize, const NV: usize> {
+    fn state_model_dx(
+        &self,
+        x: &na::SVector<f64, NX>,
+        w: &na::SVector<f64, NW>,
+    ) -> na::SMatrix<f64, NX, NX>;
+
+    fn state_model_dw(
+        &self,
+        x: &na::SVector<f64, NX>,
+        w: &na::SVector<f64, NW>,
+    ) -> na::SMatrix<f64, NX, NW>;
+
+    fn meas_model_dx(
+        &self,
+        x: &na::SVector<f64, NX>,
+        v: &na::SVector<f64, NV>,
+    ) -> na::SMatrix<f64, NY, NX>;
+
+    fn meas_model_dv(
+        &self,
+        x: &na::SVector<f64, NX>,
+        v: &na::SVector<f64, NV>,
+    ) -> na::SMatrix<f64, NY, NV>;
+}
+
+pub trait Linear<const NX: usize, const NW: usize, const NY: usize, const NV: usize> {
+    fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX>;
+
+    fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, NW>;
+
+    fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX>;
+
+    fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, NV>;
+}
+
+impl<T, const NX: usize, const NW: usize, const NY: usize, const NV: usize>
+    Differentiable<NX, NW, NY, NV> for T
+where
+    T: Linear<NX, NW, NY, NV>,
+{
+    fn state_model_dx(
+        &self,
+        x: &na::SVector<f64, NX>,
+        w: &na::SVector<f64, NW>,
+    ) -> na::SMatrix<f64, NX, NX> {
+        (_, _) = (x, w);
+        self.linear_state_model_dx()
+    }
+
+    fn state_model_dw(
+        &self,
+        x: &na::SVector<f64, NX>,
+        w: &na::SVector<f64, NW>,
+    ) -> na::SMatrix<f64, NX, NW> {
+        _ = (x, w);
+        self.linear_state_model_dw()
+    }
+
+    fn meas_model_dx(
+        &self,
+        x: &na::SVector<f64, NX>,
+        v: &na::SVector<f64, NV>,
+    ) -> na::SMatrix<f64, NY, NX> {
+        _ = (x, v);
+        self.linear_meas_model_dx()
+    }
+
+    fn meas_model_dv(
+        &self,
+        x: &na::SVector<f64, NX>,
+        v: &na::SVector<f64, NV>,
+    ) -> na::SMatrix<f64, NY, NV> {
+        _ = (x, v);
+        self.linear_meas_model_dv()
+    }
+}
+
+pub trait NoiseNormalDistrubuted<const NV: usize, const NW: usize> {
+    fn mean_state_noise(&self) -> na::SVector<f64, NW>;
+    fn cov_state_noise(&self) -> na::SMatrix<f64, NW, NW>;
+
+    fn mean_meas_noise(&self) -> na::SVector<f64, NV>;
+    fn cov_meas_noise(&self) -> na::SMatrix<f64, NV, NV>;
+}
 
 /// Linear Time-Invariant System
 /// x(k+1) = A*x(k) + B*u(k)
 /// y(k) = C*x(k) + D*u(k)
 /// No noise is considered
-#[allow(non_snake_case)]
 #[derive(Copy, Clone)]
 pub struct LinearSystem<const NX: usize, const NY: usize, const NU: usize> {
-    pub A: na::SMatrix<f64, NX, NX>,
-    pub B: na::SMatrix<f64, NX, NU>,
-    pub C: na::SMatrix<f64, NY, NX>,
-    pub D: na::SMatrix<f64, NY, NU>,
+    pub a_matrix: na::SMatrix<f64, NX, NX>,
+    pub b_matrix: na::SMatrix<f64, NX, NU>,
+    pub c_matrix: na::SMatrix<f64, NY, NX>,
+    pub d_matrix: na::SMatrix<f64, NY, NU>,
 }
 
-#[allow(non_snake_case)]
 impl<const NX: usize, const NY: usize, const NU: usize> LinearSystem<NX, NY, NU> {
     pub fn new(
-        A: na::SMatrix<f64, NX, NX>,
-        B: na::SMatrix<f64, NX, NU>,
-        C: na::SMatrix<f64, NY, NX>,
-        D: na::SMatrix<f64, NY, NU>,
+        a_matrix: na::SMatrix<f64, NX, NX>,
+        b_matrix: na::SMatrix<f64, NX, NU>,
+        c_matrix: na::SMatrix<f64, NY, NX>,
+        d_matrix: na::SMatrix<f64, NY, NU>,
     ) -> Self {
-        Self { A, B, C, D }
+        Self {
+            a_matrix,
+            b_matrix,
+            c_matrix,
+            d_matrix,
+        }
+    }
+}
+
+impl<const NX: usize, const NY: usize, const NU: usize> ObserverModel<NX, NU, 0, NY, NU, 0>
+    for LinearSystem<NX, NY, NU>
+{
+    fn state_model(
+        &self,
+        x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
+        w: &na::SVector<f64, 0>,
+    ) -> na::SVector<f64, NX> {
+        _ = w;
+        self.a_matrix * x + self.b_matrix * u
     }
 
-    pub fn A(&self) -> &na::SMatrix<f64, NX, NX> {
-        &self.A
+    fn meas_model(
+        &self,
+        x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, NU>,
+        v: &na::SVector<f64, 0>,
+    ) -> na::SVector<f64, NY> {
+        _ = v;
+        self.c_matrix * x + self.d_matrix * d
     }
-    pub fn B(&self) -> &na::SMatrix<f64, NX, NU> {
-        &self.B
+
+    fn gen_state_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, 0>> {
+        vec![na::SVector::<f64, 0>::zeros(); num_noise_samples]
     }
-    pub fn C(&self) -> &na::SMatrix<f64, NY, NX> {
-        &self.C
+
+    fn gen_meas_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, 0>> {
+        vec![na::SVector::<f64, 0>::zeros(); num_noise_samples]
     }
-    pub fn D(&self) -> &na::SMatrix<f64, NY, NU> {
-        &self.D
+}
+
+impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, 0, NY, 0>
+    for LinearSystem<NX, NY, NU>
+{
+    fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX> {
+        self.a_matrix
+    }
+
+    fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, 0> {
+        na::SMatrix::<f64, NX, 0>::zeros()
+    }
+
+    fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX> {
+        self.c_matrix
+    }
+
+    fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, 0> {
+        na::SMatrix::<f64, NY, 0>::zeros()
     }
 }
 
@@ -53,94 +266,21 @@ pub struct GaussianLinearSystem<const NX: usize, const NY: usize, const NU: usiz
 #[allow(non_snake_case)]
 impl<const NX: usize, const NY: usize, const NU: usize> GaussianLinearSystem<NX, NY, NU> {
     pub fn new(
-        A: na::SMatrix<f64, NX, NX>,
-        B: na::SMatrix<f64, NX, NU>,
-        C: na::SMatrix<f64, NY, NX>,
-        D: na::SMatrix<f64, NY, NU>,
+        a_matrix: na::SMatrix<f64, NX, NX>,
+        b_matrix: na::SMatrix<f64, NX, NU>,
+        c_matrix: na::SMatrix<f64, NY, NX>,
+        d_matrix: na::SMatrix<f64, NY, NU>,
         w_cov: na::SMatrix<f64, NX, NX>,
         v_cov: na::SMatrix<f64, NY, NY>,
     ) -> Self {
         Self {
-            system: LinearSystem::new(A, B, C, D),
+            system: LinearSystem::new(a_matrix, b_matrix, c_matrix, d_matrix),
             w_cov,
             v_cov,
         }
     }
-    pub fn A(&self) -> &na::SMatrix<f64, NX, NX> {
-        &self.system.A
-    }
-    pub fn B(&self) -> &na::SMatrix<f64, NX, NU> {
-        &self.system.B
-    }
-    pub fn C(&self) -> &na::SMatrix<f64, NY, NX> {
-        &self.system.C
-    }
-    pub fn D(&self) -> &na::SMatrix<f64, NY, NU> {
-        &self.system.D
-    }
-    pub fn w_cov(&self) -> &na::SMatrix<f64, NX, NX> {
-        &self.w_cov
-    }
-    pub fn v_cov(&self) -> &na::SMatrix<f64, NY, NY> {
-        &self.v_cov
-    }
 }
 
-pub trait Model<const NX: usize, const NY: usize, const NU: usize> {
-    /// Simulate the system for a given initial state and input sequence
-    /// Returns the state and output series (x(k), y(k))
-    fn simulate(
-        &self,
-        x0: &na::SVector<f64, NX>,
-        u: &Vec<na::SVector<f64, NU>>,
-    ) -> (Vec<na::SVector<f64, NX>>, Vec<na::SVector<f64, NY>>);
-    /// Simulate one discrete time step
-    /// Returns the next state and the output (x(k+1), y(k))
-    fn simulate_step(
-        &self,
-        x: &na::SVector<f64, NX>,
-        u: &na::SVector<f64, NU>,
-    ) -> (na::SVector<f64, NX>, na::SVector<f64, NY>);
-}
-
-impl<const NX: usize, const NY: usize, const NU: usize> Model<NX, NY, NU>
-    for LinearSystem<NX, NY, NU>
-{
-    fn simulate(
-        &self,
-        x0: &na::SVector<f64, NX>,
-        u: &Vec<na::SVector<f64, NU>>,
-    ) -> (Vec<na::SVector<f64, NX>>, Vec<na::SVector<f64, NY>>) {
-        let mut x_k = *x0;
-        let mut y_series = Vec::with_capacity(u.len());
-        let mut x_series = Vec::with_capacity(u.len());
-
-        for u_k in u {
-            let y_k = self.C * x_k + self.D * u_k;
-            let x_k_next = self.A * x_k + self.B * u_k;
-
-            y_series.push(y_k);
-            x_series.push(x_k); // align with y_k
-            x_k = x_k_next;
-        }
-        assert!(y_series.len() == u.len());
-        assert!(x_series.len() == u.len());
-        (x_series, y_series)
-    }
-
-    fn simulate_step(
-        &self,
-        x: &na::SVector<f64, NX>,
-        u: &na::SVector<f64, NU>,
-    ) -> (na::SVector<f64, NX>, na::SVector<f64, NY>) {
-        let x_next = self.A * x + self.B * u;
-        let y = self.C * x + self.D * u;
-        (x_next, y)
-    }
-}
-
-/// Generate a multivariate normal sampler for a given mean and covariance
-/// The sampler is a closure that returns a sample of the multivariate normal distribution
 fn multivariate_normal_sampler<const N: usize>(
     mean: &na::SVector<f64, N>,
     cov: &na::SMatrix<f64, N, N>,
@@ -164,59 +304,68 @@ fn multivariate_normal_sampler<const N: usize>(
     Box::new(gen_func)
 }
 
-impl<const NX: usize, const NY: usize, const NU: usize> Model<NX, NY, NU>
+impl<const NX: usize, const NY: usize, const NU: usize> ObserverModel<NX, NU, NX, NY, NU, NY>
     for GaussianLinearSystem<NX, NY, NU>
 {
-    fn simulate(
-        &self,
-        x0: &na::SVector<f64, NX>,
-        u: &Vec<na::SVector<f64, NU>>,
-    ) -> (Vec<na::SVector<f64, NX>>, Vec<na::SVector<f64, NY>>) {
-        let mut x_k = *x0;
-        let mut y_series = Vec::with_capacity(u.len());
-        let mut x_series = Vec::with_capacity(u.len());
-
-        let mut v_sampler =
-            multivariate_normal_sampler(&na::SVector::<f64, NY>::zeros(), &self.v_cov);
-        let mut w_sampler =
-            multivariate_normal_sampler(&na::SVector::<f64, NX>::zeros(), &self.w_cov);
-
-        for u_k in u {
-            let v_k = v_sampler();
-            let w_k = w_sampler();
-
-            let y_k = self.system.C * x_k + self.system.D * u_k + v_k;
-            let x_k_next = self.system.A * x_k + self.system.B * u_k + w_k;
-
-            y_series.push(y_k);
-            x_series.push(x_k); // align with y_k
-            x_k = x_k_next;
-        }
-        assert!(y_series.len() == u.len());
-        assert!(x_series.len() == u.len());
-        (x_series, y_series)
-    }
-    fn simulate_step(
+    fn state_model(
         &self,
         x: &na::SVector<f64, NX>,
         u: &na::SVector<f64, NU>,
-    ) -> (na::SVector<f64, NX>, na::SVector<f64, NY>) {
-        let mut v_sampler =
-            multivariate_normal_sampler(&na::SVector::<f64, NY>::zeros(), &self.v_cov);
-        let mut w_sampler =
+        w: &na::SVector<f64, NX>,
+    ) -> na::SVector<f64, NX> {
+        self.system.a_matrix * x + self.system.b_matrix * u + w
+    }
+
+    fn meas_model(
+        &self,
+        x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, NU>,
+        v: &na::SVector<f64, NY>,
+    ) -> na::SVector<f64, NY> {
+        self.system.c_matrix * x + self.system.d_matrix * d + v
+    }
+
+    fn gen_state_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NX>> {
+        let mut noise_sampler =
             multivariate_normal_sampler(&na::SVector::<f64, NX>::zeros(), &self.w_cov);
+        let noise_samples: Vec<_> = (0..num_noise_samples).map(|_| noise_sampler()).collect();
+        assert_eq!(noise_samples.len(), num_noise_samples);
+        noise_samples
+    }
 
-        let v = v_sampler();
-        let w = w_sampler();
+    fn gen_meas_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NY>> {
+        let mut noise_sampler =
+            multivariate_normal_sampler(&na::SVector::<f64, NY>::zeros(), &self.v_cov);
+        let noise_samples: Vec<_> = (0..num_noise_samples).map(|_| noise_sampler()).collect();
+        assert_eq!(noise_samples.len(), num_noise_samples);
+        noise_samples
+    }
+}
 
-        let x_next = self.system.A * x + self.system.B * u + w;
-        let y = self.system.C * x + self.system.D * u + v;
-        (x_next, y)
+impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, NX, NY, NY>
+    for GaussianLinearSystem<NX, NY, NU>
+{
+    fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX> {
+        self.system.a_matrix
+    }
+
+    fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, NX> {
+        na::SMatrix::<f64, NX, NX>::identity()
+    }
+
+    fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX> {
+        self.system.c_matrix
+    }
+
+    fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, NY> {
+        na::SMatrix::<f64, NY, NY>::identity()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn simulate_linear() {
         const NX: usize = 2;
@@ -228,13 +377,12 @@ mod tests {
         let c_matrix = na::SMatrix::<f64, NY, NX>::new_random();
         let d_matrix = na::SMatrix::<f64, NY, NU>::new_random();
 
-        let system = super::LinearSystem::new(a_matrix, b_matrix, c_matrix, d_matrix);
+        let system = LinearSystem::new(a_matrix, b_matrix, c_matrix, d_matrix);
 
         let x_init = na::SVector::<f64, NX>::new_random();
         let u = vec![na::SVector::<f64, NU>::new_random(); 100];
 
-        use super::Model;
-        let (x_series, y_series) = system.simulate(&x_init, &u);
+        let (x_series, y_series) = system.simulate(&x_init, &u, &u);
 
         assert_eq!(x_series.len(), u.len());
         assert_eq!(y_series.len(), u.len());
@@ -243,7 +391,8 @@ mod tests {
             "Initial state is the first element of x_series"
         );
 
-        let (x_next, y) = system.simulate_step(&x_init, &u[0]);
+        let x_next = system.state_model(&x_init, &u[0], &na::SVector::<f64, 0>::zeros());
+        let y = system.meas_model(&x_init, &u[0], &na::SVector::<f64, 0>::zeros());
         assert_eq!(x_series[1], x_next, "x(1) is located at x_series[1]");
         assert_eq!(y_series[0], y, "y(0) is located at y_series[0]");
     }
@@ -270,8 +419,7 @@ mod tests {
         let x_init = na::SVector::<f64, NX>::new_random();
         let u = vec![na::SVector::<f64, NU>::new_random(); 100];
 
-        use super::Model;
-        let (x_series, y_series) = system.simulate(&x_init, &u);
+        let (x_series, y_series) = system.simulate(&x_init, &u, &u);
 
         assert_eq!(x_series.len(), u.len());
         assert_eq!(y_series.len(), u.len());
@@ -279,8 +427,6 @@ mod tests {
             x_series[0], x_init,
             "Initial state is the first element of x_series"
         );
-
-        let (_, _) = system.simulate_step(&x_init, &u[0]);
     }
 
     #[test]
@@ -304,9 +450,8 @@ mod tests {
         let x_init = na::SVector::<f64, NX>::new_random();
         let u = vec![na::SVector::<f64, NU>::new_random(); 100];
 
-        use super::Model;
-        let (x_series_gaussian, y_series_gaussian) = system_guassian.simulate(&x_init, &u);
-        let (x_series_lin, y_series_lin) = system_linear.simulate(&x_init, &u);
+        let (x_series_gaussian, y_series_gaussian) = system_guassian.simulate(&x_init, &u, &u);
+        let (x_series_lin, y_series_lin) = system_linear.simulate(&x_init, &u, &u);
 
         assert_eq!(
             x_series_gaussian, x_series_lin,
