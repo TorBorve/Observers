@@ -24,30 +24,9 @@ pub trait ObserverModel<
         v: &na::SVector<f64, NV>,
     ) -> na::SVector<f64, NY>;
 
-    // fn step(
-    //     &self,
-    //     x: &na::SVector<f64, NX>,
-    //     u: &na::SVector<f64, NU>,
-    //     w: &na::SVector<f64, NW>,
-    //     d: &na::SVector<f64, ND>,
-    //     v: &na::SVector<f64, NV>,
-    // ) -> (na::SVector<f64, NX>, na::SVector<f64, NY>) {
-    //     (self.state_model(x, u, w), self.meas_model(x, d, v))
-    // }
-
     fn gen_state_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NW>>;
 
     fn gen_meas_noise(&self, num_noise_samples: usize) -> Vec<na::SVector<f64, NV>>;
-
-    // fn gen_noise(
-    //     &self,
-    //     num_noise_samples: usize,
-    // ) -> (Vec<na::SVector<f64, NW>>, Vec<na::SVector<f64, NV>>) {
-    //     (
-    //         self.gen_state_noise(num_noise_samples),
-    //         self.gen_meas_noise(num_noise_samples),
-    //     )
-    // }
 
     fn simulate(
         &self,
@@ -87,80 +66,92 @@ pub trait ObserverModel<
     }
 }
 
-pub trait Differentiable<const NX: usize, const NW: usize, const NY: usize, const NV: usize> {
+pub trait Differentiable<const NX: usize, const NU: usize, const NW: usize, const NY: usize, const ND: usize, const NV: usize> {
     fn state_model_dx(
         &self,
         x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
         w: &na::SVector<f64, NW>,
     ) -> na::SMatrix<f64, NX, NX>;
 
     fn state_model_dw(
         &self,
         x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
         w: &na::SVector<f64, NW>,
     ) -> na::SMatrix<f64, NX, NW>;
 
     fn meas_model_dx(
         &self,
         x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, ND>,
         v: &na::SVector<f64, NV>,
     ) -> na::SMatrix<f64, NY, NX>;
 
     fn meas_model_dv(
         &self,
         x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, ND>,
         v: &na::SVector<f64, NV>,
     ) -> na::SMatrix<f64, NY, NV>;
 }
 
-pub trait Linear<const NX: usize, const NW: usize, const NY: usize, const NV: usize> {
+pub trait Linear<const NX: usize, const NU: usize, const NW: usize, const NY: usize, const ND: usize, const NV: usize> {
     fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX>;
+
+    fn linear_state_model_du(&self) -> na::SMatrix<f64, NX, NU>;
 
     fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, NW>;
 
     fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX>;
 
+    fn linear_meas_model_dd(&self) -> na::SMatrix<f64, NY, ND>;
+
     fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, NV>;
 }
 
-impl<T, const NX: usize, const NW: usize, const NY: usize, const NV: usize>
-    Differentiable<NX, NW, NY, NV> for T
+impl<T, const NX: usize, const NU: usize, const NW: usize, const NY: usize, const ND: usize, const NV: usize>
+    Differentiable<NX, NU, NW, NY, ND, NV> for T
 where
-    T: Linear<NX, NW, NY, NV>,
+    T: Linear<NX, NU, NW, NY, ND, NV>,
 {
     fn state_model_dx(
         &self,
         x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
         w: &na::SVector<f64, NW>,
     ) -> na::SMatrix<f64, NX, NX> {
-        (_, _) = (x, w);
+        _ = (x, u, w);
         self.linear_state_model_dx()
     }
 
     fn state_model_dw(
         &self,
         x: &na::SVector<f64, NX>,
+        u: &na::SVector<f64, NU>,
         w: &na::SVector<f64, NW>,
     ) -> na::SMatrix<f64, NX, NW> {
-        _ = (x, w);
+        _ = (x, u, w);
         self.linear_state_model_dw()
     }
 
     fn meas_model_dx(
         &self,
         x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, ND>,
         v: &na::SVector<f64, NV>,
     ) -> na::SMatrix<f64, NY, NX> {
-        _ = (x, v);
+        _ = (x, d, v);
         self.linear_meas_model_dx()
     }
 
     fn meas_model_dv(
         &self,
         x: &na::SVector<f64, NX>,
+        d: &na::SVector<f64, ND>,
         v: &na::SVector<f64, NV>,
     ) -> na::SMatrix<f64, NY, NV> {
-        _ = (x, v);
+        _ = (x, d, v);
         self.linear_meas_model_dv()
     }
 }
@@ -233,11 +224,15 @@ impl<const NX: usize, const NY: usize, const NU: usize> ObserverModel<NX, NU, 0,
     }
 }
 
-impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, 0, NY, 0>
+impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, NU, 0, NY, NU, 0>
     for LinearSystem<NX, NY, NU>
 {
     fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX> {
         self.a_matrix
+    }
+
+    fn linear_state_model_du(&self) -> na::SMatrix<f64, NX, NU> {
+        self.b_matrix
     }
 
     fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, 0> {
@@ -246,6 +241,10 @@ impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, 0, NY, 0>
 
     fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX> {
         self.c_matrix
+    }
+
+    fn linear_meas_model_dd(&self) -> na::SMatrix<f64, NY, NU> {
+        self.d_matrix
     }
 
     fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, 0> {
@@ -342,11 +341,34 @@ impl<const NX: usize, const NY: usize, const NU: usize> ObserverModel<NX, NU, NX
     }
 }
 
-impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, NX, NY, NY>
+impl<const NX: usize, const NY: usize, const NU: usize> NoiseNormalDistrubuted<NY, NX>
+    for GaussianLinearSystem<NX, NY, NU>
+{
+    fn mean_state_noise(&self) -> na::SVector<f64, NX> {
+        na::SVector::<f64, NX>::zeros()
+    }
+    fn cov_state_noise(&self) -> na::SMatrix<f64, NX, NX> {
+        self.w_cov
+    }
+
+    fn mean_meas_noise(&self) -> na::SVector<f64, NY> {
+        na::SVector::<f64, NY>::zeros()
+
+    }
+    fn cov_meas_noise(&self) -> na::SMatrix<f64, NY, NY> {
+        self.v_cov
+    }
+}
+
+impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, NU, NX, NY, NU, NY>
     for GaussianLinearSystem<NX, NY, NU>
 {
     fn linear_state_model_dx(&self) -> na::SMatrix<f64, NX, NX> {
         self.system.a_matrix
+    }
+
+    fn linear_state_model_du(&self) -> na::SMatrix<f64, NX, NU> {
+        self.system.b_matrix
     }
 
     fn linear_state_model_dw(&self) -> na::SMatrix<f64, NX, NX> {
@@ -355,6 +377,10 @@ impl<const NX: usize, const NY: usize, const NU: usize> Linear<NX, NX, NY, NY>
 
     fn linear_meas_model_dx(&self) -> na::SMatrix<f64, NY, NX> {
         self.system.c_matrix
+    }
+
+    fn linear_meas_model_dd(&self) -> na::SMatrix<f64, NY, NU> {
+        self.system.d_matrix
     }
 
     fn linear_meas_model_dv(&self) -> na::SMatrix<f64, NY, NY> {
