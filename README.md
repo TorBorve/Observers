@@ -3,12 +3,22 @@
 
 Several state observers implemented in Rust.
 
+## Available Observers
+
+- Luenberger observers
+- Kalman filter
+- Steady state Kalman filter
+- Extended kalman filter
+
 
 ## TODO
-- [ ] Implement Kalman filter
+- [X] Implement Extended Kalman filter
+- [ ] Implement Unscented Kalman filter
+- [ ] Implement Square root kalman filter
+- [ ] Implement Square root extended kalman filter
 - [ ] Implement Particle filter
 - [ ] Implement benchmarking for different filters
 - [ ] Make Embedded systems friendly. I.e. no_std
 - [ ] Make custom matrix/linalg library.
 - [ ] Observers compatible with both static and dynamic sizes.
-- [ ] Automatic testing using Github Workflows
+- [X] Automatic testing using Github Workflows
